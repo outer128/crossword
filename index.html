@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>数字とひらがなの対応検索</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            padding: 20px;
+            max-width: 600px;
+            margin: auto;
+            background-color: #f5f6fa;
+            color: #333;
+        }
+        h1 {
+            font-size: 1.5em;
+            border-bottom: 2px solid #5a67d8;
+            padding-bottom: 10px;
+            color: #5a67d8;
+        }
+        .info-box {
+            background-color: #e2e8f0;
+            padding: 10px 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            font-size: 0.9em;
+        }
+        #dic-status {
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 15px;
+            font-weight: bold;
+            text-align: center;
+        }
+        .status-loading { background-color: #fefcbf; color: #b7791f; }
+        .status-success { background-color: #c6f6d5; color: #276749; }
+        .status-error { background-color: #fed7d7; color: #c53030; }
+        
+        .input-row {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .num-input {
+            flex-grow: 1;
+            padding: 10px;
+            font-size: 1em;
+            border: 1px solid #cbd5e0;
+            border-radius: 4px;
+        }
+        button {
+            padding: 10px 15px;
+            font-size: 1em;
+            cursor: pointer;
+            border: none;
+            border-radius: 4px;
+            background-color: #5a67d8;
+            color: white;
+            transition: background-color 0.2s;
+        }
+        button:hover { background-color: #4c51bf; }
+        button:disabled { background-color: #a0aec0; cursor: not-allowed; }
+        
+        .remove-btn {
+            margin-left: 10px;
+            background-color: #e53e3e;
+            padding: 10px 12px;
+        }
+        .remove-btn:hover { background-color: #c53030; }
+        
+        #action-area {
+            margin-top: 20px;
+            display: flex;
+            gap: 10px;
+        }
+        #result-area {
+            margin-top: 30px;
+            background-color: white;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            min-height: 100px;
+        }
+        .result-item {
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #edf2f7;
+        }
+        .result-mapping {
+            font-size: 1.1em;
+            font-weight: bold;
+            color: #2b6cb0;
+        }
+        .result-words {
+            font-size: 0.9em;
+            color: #718096;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>数字とひらがなの対応検索</h1>
+    
+    <div class="info-box">
+        辞書ファイル (<strong>buta014.dic</strong>) を参照し、入力されたすべての数字の羅列が辞書内の単語になるような「数字→ひらがな」の対応を見つけます。<br>
+        ※ 異なる数字には異なるひらがなが割り当てられます。
+    </div>
+
+    <div id="dic-status" class="status-loading">
+        辞書ファイル (buta014.dic) を読み込んでいます...
+    </div>
+    
+    <div id="file-upload-area" style="display:none; margin-bottom: 15px; padding: 10px; background: #fff; border: 1px solid #ccc; border-radius: 5px;">
+        自動読み込みに失敗しました。手動で辞書ファイルを選択してください：<br>
+        <input type="file" id="dic-file" accept=".dic,.txt" style="margin-top: 10px;">
+    </div>
+
+    <div id="input-container">
+        <div class="input-row">
+            <input type="number" class="num-input" placeholder="例: 123">
+        </div>
+        <div class="input-row">
+            <input type="number" class="num-input" placeholder="例: 234">
+        </div>
+    </div>
+
+    <div id="action-area">
+        <button id="add-btn">入力欄を増やす</button>
+        <button id="search-btn" disabled>検索</button>
+    </div>
+
+    <div id="result-area">
+        ここに検索結果が表示されます。
+    </div>
+
+<script>
+    let dictionary = new Set();
+    let wordsByLength = {};
+    let isReady = false;
+
+    // 辞書データをパースする関数
+    function parseDictionary(text) {
+        dictionary.clear();
+        wordsByLength = {};
+        
+        // 改行で分割して単語リストを作成
+        const lines = text.split(/\r?\n/);
+        for (let line of lines) {
+            let word = line.trim();
+            if (word.length > 0) {
+                dictionary.add(word);
+                if (!wordsByLength[word.length]) {
+                    wordsByLength[word.length] = [];
+                }
+                wordsByLength[word.length].push(word);
+            }
+        }
+        
+        isReady = true;
+        const statusEl = document.getElementById('dic-status');
+        statusEl.className = 'status-success';
+        statusEl.innerHTML = `辞書読み込み完了（収録単語数: ${dictionary.size.toLocaleString()} 語）`;
+        document.getElementById('search-btn').disabled = false;
+        document.getElementById('file-upload-area').style.display = 'none';
+    }
+
+    // 辞書ファイルの自動読み込み (fetch)
+    async function initDictionary() {
+        try {
+            const response = await fetch('buta014.dic');
+            if (!response.ok) throw new Error("Fetch failed");
+            
+            const buffer = await response.arrayBuffer();
+            // 一般的な辞書ファイルはShift_JISかUTF-8。まずはUTF-8としてデコードを試みる
+            let text = new TextDecoder('utf-8').decode(buffer);
+            
+            // UTF-8で文字化けした場合（Replacement Characterが含まれる場合）はShift_JISでデコード
+            if (text.includes('')) {
+                text = new TextDecoder('shift-jis').decode(buffer);
+            }
+            
+            parseDictionary(text);
+        } catch (err) {
+            console.error(err);
+            const statusEl = document.getElementById('dic-status');
+            statusEl.className = 'status-error';
+            statusEl.innerHTML = "辞書の自動読み込みに失敗しました。ローカル環境等の制限が原因です。";
+            document.getElementById('file-upload-area').style.display = 'block';
+        }
+    }
+
+    // 手動でのファイル読み込み処理（フォールバック用）
+    document.getElementById('dic-file').addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        
+        const reader = new FileReader();
+        reader.onload = function(evt) {
+            let text = evt.target.result;
+            if (text.includes('')) {
+                const reader2 = new FileReader();
+                reader2.onload = function(evt2) { parseDictionary(evt2.target.result); };
+                reader2.readAsText(file, 'shift-jis');
+            } else {
+                parseDictionary(text);
+            }
+        };
+        reader.readAsText(file, 'utf-8');
+    });
+
+    // 初期化実行
+    initDictionary();
+
+    // 「入力欄を増やす」ボタンの処理
+    document.getElementById('add-btn').addEventListener('click', () => {
+        const container = document.getElementById('input-container');
+        const row = document.createElement('div');
+        row.className = 'input-row';
+        
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.className = 'num-input';
+        input.placeholder = '例: 32';
+        
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'remove-btn';
+        removeBtn.textContent = '消去';
+        removeBtn.onclick = () => container.removeChild(row);
+        
+        row.appendChild(input);
+        row.appendChild(removeBtn);
+        container.appendChild(row);
+    });
+
+    // 「検索」ボタンの処理
+    document.getElementById('search-btn').addEventListener('click', () => {
+        if (!isReady) return;
+
+        // 空でない入力を取得
+        const inputs = Array.from(document.querySelectorAll('.num-input'))
+                            .map(input => input.value.trim())
+                            .filter(val => val.length > 0);
+                            
+        if (inputs.length === 0) {
+            alert("数字を入力してください。");
+            return;
+        }
+
+        const resultArea = document.getElementById('result-area');
+        resultArea.innerHTML = "検索中... しばらくお待ちください。";
+
+        // 非同期に処理を逃がすことで「検索中...」の描画を反映させる
+        setTimeout(() => {
+            // 処理を最適化するため、長い文字列から順に探索する
+            const sortedInputs = [...inputs].sort((a, b) => b.length - a.length);
+            let results = [];
+
+            // バックトラッキング関数
+            function dfs(idx, numToCharMap, usedChars) {
+                // すべての入力文字列が辞書の単語に変換できた場合
+                if (idx === sortedInputs.length) {
+                    results.push(Object.assign({}, numToCharMap));
+                    return;
+                }
+
+                const currentNumStr = sortedInputs[idx];
+                const len = currentNumStr.length;
+
+                // 現在の文字列(数字)が、既にすべて文字にマッピングされているか確認
+                let isFullyMapped = true;
+                let currentWord = "";
+                for (let i = 0; i < len; i++) {
+                    if (!numToCharMap[currentNumStr[i]]) {
+                        isFullyMapped = false;
+                        break;
+                    }
+                    currentWord += numToCharMap[currentNumStr[i]];
+                }
+
+                if (isFullyMapped) {
+                    // すべてマッピング済みなら、辞書に存在するか確認するだけ
+                    if (dictionary.has(currentWord)) {
+                        dfs(idx + 1, numToCharMap, usedChars);
+                    }
+                    return;
+                }
+
+                // 未マッピングの数字がある場合、辞書の中から同じ長さの単語を候補にする
+                const candidates = wordsByLength[len];
+                if (!candidates) return; 
+
+                for (let i = 0; i < candidates.length; i++) {
+                    const word = candidates[i];
+                    let match = true;
+                    let newlyAddedMap = [];
+
+                    for (let j = 0; j < len; j++) {
+                        const num = currentNumStr[j];
+                        const char = word[j];
+
+                        if (numToCharMap[num]) {
+                            // 既にマッピングされている場合は、文字が一致するか
+                            if (numToCharMap[num] !== char) {
+                                match = false;
+                                break;
+                            }
+                        } else {
+                            // 新しいマッピングの場合、その文字が他の数字にまだ使われていないか (1対1対応)
+                            if (usedChars.has(char)) {
+                                match = false;
+                                break;
+                            }
+                            numToCharMap[num] = char;
+                            usedChars.add(char);
+                            newlyAddedMap.push({num: num, char: char});
+                        }
+                    }
+
+                    // 矛盾なく当てはまったら次の単語へ
+                    if (match) {
+                        dfs(idx + 1, numToCharMap, usedChars);
+                    }
+
+                    // バックトラッキング (追加したマッピングを元に戻す)
+                    for (let m of newlyAddedMap) {
+                        delete numToCharMap[m.num];
+                        usedChars.delete(m.char);
+                    }
+                }
+            }
+
+            // 探索開始
+            dfs(0, {}, new Set());
+
+            // 検索結果の描画
+            resultArea.innerHTML = "";
+            if (results.length === 0) {
+                resultArea.innerHTML = "<p>条件に合致する対応は見つかりませんでした。</p>";
+            } else {
+                resultArea.innerHTML = `<p><strong>${results.length}件</strong> の対応が見つかりました。</p>`;
+                
+                results.forEach((mapping, index) => {
+                    const div = document.createElement('div');
+                    div.className = 'result-item';
+                    
+                    // 数字キーでソートして「1:あ 2:い」の形式にする
+                    const keys = Object.keys(mapping).sort((a, b) => Number(a) - Number(b));
+                    const mappingStr = keys.map(k => `${k}:${mapping[k]}`).join(' ');
+                    
+                    // 出来上がった単語のリスト
+                    const translatedWords = inputs.map(numStr => {
+                        return numStr.split('').map(n => mapping[n]).join('');
+                    }).join('、 ');
+
+                    div.innerHTML = `
+                        <div class="result-mapping">対応 ${index + 1} ─ [ ${mappingStr} ]</div>
+                        <div class="result-words">できる言葉: ${translatedWords}</div>
+                    `;
+                    resultArea.appendChild(div);
+                });
+            }
+        }, 50); // 描画更新待ち
+    });
+</script>
+</body>
+</html>
